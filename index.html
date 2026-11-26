@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#101827">
+<title>AI VIP</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#0b1220;color:#edf3ff}
+*{box-sizing:border-box}body{margin:0;min-height:100vh}
+header{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:12px;padding:14px;background:#111d31;border-bottom:1px solid #2b3b56}
+.logo{width:42px;height:42px;border-radius:13px;display:grid;place-items:center;background:#245ba2;font-size:23px}
+h1{font-size:20px;margin:0;color:#8bc3ff}header p{margin:3px 0 0;font-size:11px;color:#a8b7ce}
+#status{margin-left:auto;font-size:11px;color:#9db1ce;text-align:right;max-width:125px}
+main{max-width:850px;margin:auto;padding:14px}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+button,.filebtn{border:1px solid #344762;border-radius:11px;padding:10px 12px;background:#1a2a43;color:#dceaff;font-weight:650;font-size:13px}
+button:disabled{opacity:.45}
+#chat{height:57vh;min-height:330px;overflow:auto;padding:8px 2px}
+.welcome{text-align:center;padding:42px 10px;color:#aabbd2}
+.welcome h2{color:#f0f5ff}
+.msg{max-width:92%;margin:12px 0;padding:12px 14px;border:1px solid #30415c;border-radius:14px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
+.msg.user{margin-left:auto;background:#204b7d;border-color:#356aa7}
+.msg.ai{margin-right:auto;background:#17243a}
+.who{font-size:11px;color:#9bc9ff;font-weight:750;margin-bottom:4px}
+.composer{position:sticky;bottom:0;background:#0b1220;padding:8px 0 4px}
+textarea{width:100%;min-height:82px;max-height:180px;resize:vertical;border:1px solid #3a4b66;border-radius:14px;background:#142138;color:#fff;padding:13px;font:inherit;outline:none}
+.actions{display:flex;gap:8px;margin-top:8px}
+#send{background:#2879d8;border:0;flex:1}
+#file{display:none}
+.note{font-size:11px;line-height:1.5;color:#8292aa;text-align:center}
+.small{font-size:11px;color:#94a8c3}
+@media(min-width:700px){#chat{height:62vh}.msg{max-width:82%}}
+</style>
+</head>
+<body>
+<header>
+ <div class="logo">✦</div>
+ <div><h1>AI VIP</h1><p>Trợ lý AI chạy trực tiếp trên thiết bị</p></div>
+ <div id="status">Chưa tải mô hình</div>
+</header>
+<main>
+ <div class="toolbar">
+  <button id="load">Tải bộ não AI</button>
+  <button id="search">Tìm trên web</button>
+  <label class="filebtn" for="file">Đọc PDF</label>
+  <input id="file" type="file" accept="application/pdf">
+  <button id="clear">Xóa chat</button>
+ </div>
+ <div id="chat" aria-live="polite">
+  <div class="welcome">
+   <div style="font-size:36px;color:#83bdff">✦</div>
+   <h2>Xin chào! Tôi là AI VIP.</h2>
+   <p>Nhấn “Tải bộ não AI” lần đầu. Mô hình sẽ được tải về thiết bị, có thể mất vài phút và tốn dung lượng.</p>
+   <p class="small">Bản thử nghiệm dùng mô hình nhỏ chạy trên trình duyệt; không đảm bảo trả lời luôn chính xác.</p>
+  </div>
+ </div>
+ <div class="composer">
+  <textarea id="question" maxlength="4000" placeholder="Nhập câu hỏi..."></textarea>
+  <div class="actions"><button id="send" disabled>Gửi câu hỏi</button></div>
+ </div>
+ <p class="note">Câu hỏi và lịch sử chat được lưu trên trình duyệt của thiết bị này. Đừng nhập mật khẩu hoặc thông tin riêng tư.</p>
+</main>
+
+<script type="module">
+import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1";
+
+const MODEL = "onnx-community/Qwen2.5-0.5B-Instruct";
+const SYSTEM = `Bạn là AI VIP, trợ lý tiếng Việt đa lĩnh vực.
+Hãy trả lời rõ ràng, có cấu trúc và phù hợp với câu hỏi.
+Không bịa nguồn, số liệu hoặc sự kiện. Nếu không chắc, hãy nói rõ.
+Phân biệt sự thật, suy luận và giả thuyết. Không tuyên bố đã tra cứu Internet nếu chưa có nguồn được cung cấp.
+Với câu hỏi học tập, hãy giải thích dễ hiểu từng bước.`;
+
+const $ = id => document.getElementById(id);
+const chat = $("chat"), statusBox = $("status"), sendBtn = $("send");
+let model = null, busy = false, pdfContext = "";
+let history = [];
+try { history = JSON.parse(localStorage.getItem("aivip_history") || "[]"); } catch {}
+history = Array.isArray(history) ? history.slice(-24) : [];
+
+function saveHistory(){
+  try { localStorage.setItem("aivip_history", JSON.stringify(history.slice(-24))); } catch {}
+}
+function addMessage(text, role){
+  const wrap = document.createElement("div");
+  wrap.className = "msg " + role;
+  const who = document.createElement("div");
+  who.className = "who";
+  who.textContent = role === "user" ? "BẠN" : "AI VIP";
+  const body = document.createElement("div");
+  body.textContent = text;
+  wrap.append(who, body);
+  chat.append(wrap);
+  chat.scrollTop = chat.scrollHeight;
+  return body;
+}
+function renderHistory(){
+  chat.replaceChildren();
+  if(!history.length){
+    const w=document.createElement("div"); w.className="welcome";
+    const h=document.createElement("h2"); h.textContent="AI VIP sẵn sàng";
+    const p=document.createElement("p"); p.textContent="Hãy tải mô hình rồi đặt câu hỏi.";
+    w.append(h,p); chat.append(w); return;
+  }
+  for(const m of history) addMessage(m.content, m.role === "user" ? "user" : "ai");
+}
+renderHistory();
+
+async function loadModel(){
+  if(model) return;
+  $("load").disabled = true;
+  statusBox.textContent = "Đang tải mô hình…";
+  addMessage("Đang tải mô hình AI lần đầu. Vui lòng giữ trang mở và dùng Wi‑Fi nếu có thể.", "ai");
+  try{
+    model = await pipeline("text-generation", MODEL, {dtype:"q4"});
+    statusBox.textContent = "AI đã sẵn sàng";
+    sendBtn.disabled = false;
+    addMessage("Đã tải xong bộ não AI. Bạn có thể bắt đầu trò chuyện.", "ai");
+  }catch(err){
+    statusBox.textContent = "Tải mô hình lỗi";
+    addMessage("Không tải được mô hình: " + (err?.message || err) + "\nHãy thử Chrome mới hơn, kiểm tra mạng và dung lượng trống rồi tải lại.", "ai");
+    $("load").disabled = false;
+  }
+}
+$("load").addEventListener("click", loadModel);
+
+async function ask(){
+  const q = $("question").value.trim();
+  if(!q || busy) return;
+  if(!model){ addMessage("Hãy nhấn “Tải bộ não AI” trước.", "ai"); return; }
+  busy=true; sendBtn.disabled=true;
+  $("question").value="";
+  addMessage(q,"user");
+  const userContent = pdfContext ? `Tài liệu PDF người dùng đã tải:\n${pdfContext.slice(0,9000)}\n\nCâu hỏi: ${q}` : q;
+  history.push({role:"user",content:userContent});
+  const pending=addMessage("AI VIP đang suy nghĩ…","ai");
+  try{
+    const messages=[{role:"system",content:SYSTEM},...history.slice(-10)];
+    const out=await model(messages,{max_new_tokens:220, do_sample:false});
+    const generated=out?.[0]?.generated_text;
+    let answer="";
+    if(Array.isArray(generated)) answer=generated.at(-1)?.content || "";
+    else answer=String(generated || "");
+    if(!answer) answer="Mô hình không tạo được câu trả lời. Hãy thử hỏi lại ngắn gọn.";
+    pending.textContent=answer;
+    history.push({role:"assistant",content:answer});
+    history=history.slice(-24); saveHistory();
+  }catch(err){
+    pending.textContent="Có lỗi khi tạo câu trả lời: "+(err?.message || err);
+    history.pop();
+  }finally{
+    busy=false;sendBtn.disabled=false;$("question").focus();chat.scrollTop=chat.scrollHeight;
+  }
+}
+sendBtn.addEventListener("click",ask);
+$("question").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();ask();}});
+$("clear").addEventListener("click",()=>{history=[];pdfContext="";saveHistory();renderHistory();});
+$("search").addEventListener("click",()=>{
+  const q=$("question").value.trim();
+  if(!q){addMessage("Nhập nội dung cần tìm vào ô câu hỏi rồi nhấn “Tìm trên web”.","ai");return;}
+  window.open("https://www.google.com/search?q="+encodeURIComponent(q),"_blank","noopener");
+});
+
+$("file").addEventListener("change", async e=>{
+  const file=e.target.files?.[0]; if(!file) return;
+  if(file.size>8*1024*1024){addMessage("PDF quá lớn. Bản này giới hạn 8 MB.","ai");e.target.value="";return;}
+  statusBox.textContent="Đang đọc PDF…";
+  try{
+    const pdfjs=await import("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs");
+    pdfjs.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
+    const bytes=await file.arrayBuffer();
+    const doc=await pdfjs.getDocument({data:bytes}).promise;
+    let text="";
+    const pages=Math.min(doc.numPages,8);
+    for(let i=1;i<=pages;i++){
+      const page=await doc.getPage(i);
+      const content=await page.getTextContent();
+      text+=content.items.map(x=>x.str).join(" ")+"\n";
+    }
+    pdfContext=text.slice(0,9000);
+    addMessage(`Đã đọc ${pages}/${doc.numPages} trang PDF. Bây giờ hãy hỏi về nội dung tài liệu.`, "ai");
+    statusBox.textContent="Đã nạp PDF";
+  }catch(err){
+    addMessage("Không đọc được PDF. Tệp có thể là bản scan ảnh hoặc bị lỗi. "+(err?.message||err),"ai");
+    statusBox.textContent="PDF lỗi";
+  }finally{e.target.value="";}
+});
+</script>
+</body>
+  </html>
+  
